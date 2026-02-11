@@ -1,5 +1,7 @@
 
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
+import { googleLogout } from '@react-oauth/google';
 import { User } from '../types';
 
 interface LayoutProps {
@@ -10,6 +12,14 @@ interface LayoutProps {
 }
 
 const Layout: React.FC<LayoutProps> = ({ children, user, activeTab, setActiveTab }) => {
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    googleLogout();
+    localStorage.removeItem('user');
+    localStorage.removeItem('token');
+    navigate('/');
+  };
   const menuItems = [
     { id: 'roadmap', icon: 'fa-map', label: 'Roadmap' },
     { id: 'playground', icon: 'fa-code', label: 'Playground' },
@@ -34,11 +44,10 @@ const Layout: React.FC<LayoutProps> = ({ children, user, activeTab, setActiveTab
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all ${
-                activeTab === item.id 
-                  ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-600/20' 
-                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-              }`}
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all ${activeTab === item.id
+                ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-600/20'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                }`}
             >
               <i className={`fas ${item.icon}`}></i>
               <span className="font-medium">{item.label}</span>
@@ -46,14 +55,25 @@ const Layout: React.FC<LayoutProps> = ({ children, user, activeTab, setActiveTab
           ))}
         </nav>
 
-        <div className="p-4 border-t border-slate-800">
-          <div className="flex items-center space-x-3 bg-slate-800/50 p-3 rounded-xl">
-            <img src={`https://picsum.photos/seed/${user.id}/40/40`} className="rounded-full" alt="avatar" />
+        <div className="p-4 border-t border-white/5">
+          <div className="flex items-center space-x-3 bg-white/[0.03] p-3 rounded-xl border border-white/5">
+            <img
+              src={user.picture || `https://picsum.photos/seed/${user.id}/40/40`}
+              className="rounded-full w-10 h-10 object-cover ring-2 ring-indigo-500/30"
+              alt="avatar"
+            />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold truncate text-white">{user.name}</p>
               <p className="text-xs text-slate-400">Level {user.level} {user.rank}</p>
             </div>
           </div>
+          <button
+            onClick={handleLogout}
+            className="group w-full mt-3 px-3 py-2.5 bg-white/[0.03] hover:bg-red-500/10 text-slate-400 hover:text-red-400 rounded-xl transition-all duration-300 text-sm font-medium border border-white/5 hover:border-red-500/20 flex items-center justify-center gap-2"
+          >
+            <i className="fas fa-sign-out-alt group-hover:translate-x-0.5 transition-transform duration-300"></i>
+            Sign Out
+          </button>
         </div>
       </aside>
 
@@ -67,7 +87,7 @@ const Layout: React.FC<LayoutProps> = ({ children, user, activeTab, setActiveTab
             </button>
             <h2 className="text-lg font-semibold text-white capitalize">{activeTab}</h2>
           </div>
-          
+
           <div className="flex items-center space-x-6">
             <div className="flex items-center space-x-2 bg-indigo-900/20 px-3 py-1 rounded-full border border-indigo-500/30">
               <i className="fas fa-bolt text-yellow-500"></i>
@@ -79,6 +99,9 @@ const Layout: React.FC<LayoutProps> = ({ children, user, activeTab, setActiveTab
             </div>
             <button className="text-slate-400 hover:text-white transition-colors">
               <i className="fas fa-bell"></i>
+            </button>
+            <button onClick={handleLogout} className="text-slate-400 hover:text-red-400 transition-colors" title="Sign Out">
+              <i className="fas fa-sign-out-alt"></i>
             </button>
           </div>
         </header>

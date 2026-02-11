@@ -8,16 +8,37 @@ import { User } from '../types';
 
 const Dashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState('roadmap');
-  
+
   // Mock user session
-  const [user] = useState<User>({
-    id: 'user-778',
-    name: 'Jane Doe',
-    email: 'jane@nexusai.io',
-    xp: 1250,
-    level: 12,
-    streak: 8,
-    rank: 'ML Apprentice'
+  // Mock user session with localStorage override
+  const [user] = useState<User>(() => {
+    const storedUser = localStorage.getItem('user');
+    const baseUser = {
+      id: 'user-778',
+      name: 'Jane Doe',
+      email: 'jane@nexusai.io',
+      xp: 1250,
+      level: 12,
+      streak: 8,
+      rank: 'ML Apprentice'
+    };
+
+    if (storedUser) {
+      try {
+        const googleUser = JSON.parse(storedUser);
+        return {
+          ...baseUser,
+          id: googleUser.sub || baseUser.id,
+          name: googleUser.name || baseUser.name,
+          email: googleUser.email || baseUser.email,
+          picture: googleUser.picture
+        };
+      } catch (e) {
+        console.error("Failed to parse user from local storage", e);
+        return baseUser;
+      }
+    }
+    return baseUser;
   });
 
   const renderContent = () => {

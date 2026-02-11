@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { aiService } from '../services/geminiService';
+import { aiService } from '../services/llamaService';
 
 const PlaygroundView: React.FC = () => {
   const [code, setCode] = useState<string>(`# Welcome to Cognify Playground\nimport numpy as np\n\ndef main():\n    print("Hello, AI Architect!")\n\nmain()`);
@@ -25,7 +25,7 @@ const PlaygroundView: React.FC = () => {
       const advice = await aiService.getCodeExplanation(code, language);
       setAiFeedback(advice || 'Could not generate advice at this moment.');
     } catch (error) {
-      setAiFeedback('Error reaching Gemini: ' + error);
+      setAiFeedback('Error reaching Llama API: ' + error);
     } finally {
       setIsLoading(false);
     }
@@ -35,7 +35,7 @@ const PlaygroundView: React.FC = () => {
     <div className="h-full flex flex-col space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex space-x-4">
-          <select 
+          <select
             value={language}
             onChange={(e) => setLanguage(e.target.value)}
             className="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -44,7 +44,7 @@ const PlaygroundView: React.FC = () => {
             <option value="javascript">JavaScript (Node v18)</option>
             <option value="cpp">C++ (GCC 11)</option>
           </select>
-          <button 
+          <button
             onClick={runCode}
             disabled={isLoading}
             className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-6 py-2 rounded-lg text-sm font-bold flex items-center space-x-2 transition-all"
@@ -52,7 +52,7 @@ const PlaygroundView: React.FC = () => {
             <i className="fas fa-play"></i>
             <span>Run Code</span>
           </button>
-          <button 
+          <button
             onClick={getAIAdvice}
             disabled={isLoading}
             className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-6 py-2 rounded-lg text-sm font-bold flex items-center space-x-2 transition-all"

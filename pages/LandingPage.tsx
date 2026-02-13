@@ -31,7 +31,7 @@ const LandingPage: React.FC = () => {
                     localStorage.setItem('user', JSON.stringify(userInfo));
                     localStorage.setItem('token', tokenResponse.access_token);
                     setUser(userInfo);
-                    navigate('/dashboard');
+                    navigate('/roadmap');
                 }
             } catch (error) {
                 console.error("Login Failed: ", error);
@@ -76,7 +76,7 @@ const LandingPage: React.FC = () => {
                         {user ? (
                             <div className="flex items-center gap-3">
                                 <Link
-                                    to="/dashboard"
+                                    to="/roadmap"
                                     className="group relative px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40 transition-all duration-300 hover:-translate-y-0.5 overflow-hidden"
                                 >
                                     <span className="relative z-10 flex items-center gap-2">
@@ -149,7 +149,7 @@ const LandingPage: React.FC = () => {
                                         </p>
                                     </div>
                                     <Link
-                                        to="/dashboard"
+                                        to="/roadmap"
                                         className="group relative ml-4 px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40 transition-all duration-300 hover:-translate-y-0.5 overflow-hidden"
                                     >
                                         <span className="relative z-10 flex items-center gap-2">

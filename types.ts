@@ -32,3 +32,69 @@ export interface CodeSubmission {
   error?: string;
   aiFeedback?: string;
 }
+
+// ── Dynamic Roadmap Types ──
+
+export interface Subtopic {
+  id: string;
+  title: string;
+  description: string;
+  content: string;  // AI-generated detailed content (loaded lazily)
+}
+
+export interface RoadmapLevel {
+  id: string;
+  order: number;
+  title: string;
+  description: string;
+  theoryContent: string;     // overview content (markdown)
+  subtopics: Subtopic[];     // navigable sub-modules
+  imageQuery?: string;       // search term for illustrative image
+  xpReward: number;
+  quiz: QuizQuestion[];
+}
+
+export interface GeneratedRoadmap {
+  id: string;
+  topic: string;
+  createdAt: string;
+  levels: RoadmapLevel[];
+}
+
+export interface QuizQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+}
+
+export interface QuizResult {
+  levelId: string;
+  score: number;
+  total: number;
+  answers: number[];          // user-selected indices
+  submittedAt: string;
+}
+
+export interface UserProgress {
+  visitorId: string;          // localStorage identifier
+  roadmaps: RoadmapProgress[];
+  totalXp: number;
+  rewards: string[];          // earned reward IDs
+}
+
+export interface RoadmapProgress {
+  roadmapId: string;
+  topic: string;
+  completedLevels: string[];  // level IDs
+  quizResults: QuizResult[];
+}
+
+export interface Reward {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  xpThreshold: number;
+}

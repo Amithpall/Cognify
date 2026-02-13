@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/llamaService';
 
 interface Message {
@@ -7,49 +7,77 @@ interface Message {
   text: string;
 }
 
+const SYSTEM_PROMPT = "You are a senior AI Learning Tutor at Cognify. Explain complex AI concepts simply, use analogies, and encourage students. Be concise but thorough.";
+
 const ChatbotView: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'assistant', text: 'Hello! I am your AI Learning Tutor powered by Llama 3.2. Ask me anything about Machine Learning, Neural Networks, or help with your roadmap.' }
+    { role: 'assistant', text: 'Hello! I am your AI Learning Tutor powered by Kimi K2.5. Ask me anything about Machine Learning, Neural Networks, or help with your roadmap.' }
   ]);
   const [input, setInput] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
-  }, [messages]);
+  // Auto-scroll on every message update
+  const scrollToBottom = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    });
+  }, []);
+
+  useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
 
   const sendMessage = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || isGenerating) return;
 
-    const userMsg = input;
+    const userMsg = input.trim();
     setInput('');
-    setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
-    setIsTyping(true);
+    setIsGenerating(true);
+
+    // Add user message + empty assistant placeholder
+    const userMessage: Message = { role: 'user', text: userMsg };
+    const assistantPlaceholder: Message = { role: 'assistant', text: '' };
+
+    setMessages(prev => [...prev, userMessage, assistantPlaceholder]);
 
     try {
-      // Build conversation history for multi-turn chat
-      const chatHistory = [...messages, { role: 'user' as const, text: userMsg }].map(m => ({
+      const chatHistory = [...messages, userMessage].map(m => ({
         role: m.role === 'user' ? 'user' as const : 'assistant' as const,
         content: m.text
       }));
 
-      const response = await aiService.chat(
+      // Stream tokens directly — each onToken call updates the message INSTANTLY
+      await aiService.chatStream(
         chatHistory,
-        "You are a senior AI Learning Tutor at Cognify. Explain complex AI concepts simply, use analogies, and encourage students to experiment. Be concise but thorough."
+        (accumulated) => {
+          // Update the last message with accumulated text — zero delay
+          setMessages(prev => {
+            const updated = [...prev];
+            updated[updated.length - 1] = { role: 'assistant', text: accumulated };
+            return updated;
+          });
+        },
+        SYSTEM_PROMPT
       );
-
-      setMessages(prev => [...prev, { role: 'assistant', text: response || 'Sorry, I hit a snag.' }]);
     } catch (err) {
       console.error('Chat error:', err);
-      setMessages(prev => [...prev, { role: 'assistant', text: 'Connection error. Please make sure your Llama server is running.' }]);
+      setMessages(prev => {
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          role: 'assistant',
+          text: 'Connection error. Make sure your AI server is running.'
+        };
+        return updated;
+      });
     } finally {
-      setIsTyping(false);
+      setIsGenerating(false);
     }
   };
 
   return (
     <div className="h-full flex flex-col bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+      {/* Header */}
       <div className="px-6 py-4 bg-slate-800/50 border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center space-x-4">
           <div className="relative">
@@ -64,54 +92,52 @@ const ChatbotView: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[10px] px-2 py-0.5 bg-purple-500/20 text-purple-300 rounded-full border border-purple-500/30 font-semibold">Llama 3.2</span>
-          <button className="text-slate-400 hover:text-white transition-colors">
-            <i className="fas fa-cog"></i>
-          </button>
+          <span className="text-[10px] px-2 py-0.5 bg-purple-500/20 text-purple-300 rounded-full border border-purple-500/30 font-semibold">Kimi K2.5</span>
         </div>
       </div>
 
+      {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[80%] rounded-2xl px-5 py-3 ${m.role === 'user'
-                ? 'bg-indigo-600 text-white rounded-br-none'
-                : 'bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700'
+              ? 'bg-indigo-600 text-white rounded-br-none'
+              : 'bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700'
               }`}>
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">{m.text}</p>
+              <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                {m.text || '\u00A0'}
+                {/* Blinking cursor on the streaming message */}
+                {isGenerating && i === messages.length - 1 && m.role === 'assistant' && (
+                  <span className="inline-block w-1.5 h-4 bg-indigo-400 ml-0.5 rounded-sm align-text-bottom animate-pulse"></span>
+                )}
+              </p>
             </div>
           </div>
         ))}
-        {isTyping && (
-          <div className="flex justify-start">
-            <div className="bg-slate-800 text-slate-400 rounded-2xl rounded-bl-none px-5 py-3 flex space-x-1 items-center border border-slate-700">
-              <div className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce"></div>
-              <div className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce delay-75"></div>
-              <div className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce delay-150"></div>
-            </div>
-          </div>
-        )}
       </div>
 
+      {/* Input */}
       <div className="p-4 bg-slate-900 border-t border-slate-800">
         <div className="relative">
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
             placeholder="Ask a question about AI..."
-            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-6 py-4 pr-16 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-600 transition-all placeholder:text-slate-500"
+            disabled={isGenerating}
+            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-6 py-4 pr-16 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-600 transition-all placeholder:text-slate-500 disabled:opacity-40"
           />
           <button
             onClick={sendMessage}
-            className="absolute right-3 top-3 bg-indigo-600 hover:bg-indigo-500 text-white w-10 h-10 rounded-lg flex items-center justify-center transition-all shadow-lg shadow-indigo-600/20"
+            disabled={isGenerating}
+            className="absolute right-3 top-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 text-white w-10 h-10 rounded-lg flex items-center justify-center transition-all shadow-lg shadow-indigo-600/20 disabled:opacity-50"
           >
             <i className="fas fa-paper-plane text-xs"></i>
           </button>
         </div>
         <p className="text-[10px] text-center mt-3 text-slate-500">
-          Powered by Llama 3.2 • Running locally on your server
+          Powered by Kimi K2.5 • AI-powered learning
         </p>
       </div>
     </div>

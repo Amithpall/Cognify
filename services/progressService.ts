@@ -1,9 +1,11 @@
 /**
  * Progress & Rewards Service
- * Stores all user progress, XP, and rewards in localStorage.
+ * Hybrid: localStorage for instant reads + API for persistent DB sync.
+ * localStorage acts as a fast cache; PostgreSQL is the source of truth.
  */
 
 import { UserProgress, RoadmapProgress, QuizResult, Reward } from '../types';
+import * as api from './apiService';
 
 const PROGRESS_KEY = 'cognify_progress';
 
@@ -19,6 +21,12 @@ export const REWARDS: Reward[] = [
     { id: 'three-roadmaps', name: 'Explorer', description: 'Complete 3 different roadmaps', icon: 'fa-compass', xpThreshold: 0 },
 ];
 
+/** Get the DB user ID (set by Dashboard on login) */
+function getDbUserId(): number | null {
+    const id = localStorage.getItem('db_user_id');
+    return id ? parseInt(id, 10) : null;
+}
+
 function getProgress(): UserProgress {
     try {
         const stored = localStorage.getItem(PROGRESS_KEY);
@@ -33,8 +41,36 @@ function saveProgress(progress: UserProgress): void {
     localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
 }
 
+/** Sync XP and rewards to the database (fire-and-forget) */
+async function syncToDb(progress: UserProgress): Promise<void> {
+    const userId = getDbUserId();
+    if (!userId) return;
+    try {
+        await api.updateUserXp(userId, progress.totalXp, progress.rewards);
+    } catch (e) {
+        console.warn('[Progress] DB sync failed, localStorage is still up to date', e);
+    }
+}
+
+/** Sync roadmap progress to the database (fire-and-forget) */
+async function syncRoadmapProgressToDb(roadmapDbId: number, rp: RoadmapProgress): Promise<void> {
+    const userId = getDbUserId();
+    if (!userId || !roadmapDbId) return;
+    try {
+        await api.upsertProgress({
+            user_id: userId,
+            roadmap_id: roadmapDbId,
+            completed_levels: rp.completedLevels,
+            quiz_results: rp.quizResults,
+        });
+    } catch (e) {
+        console.warn('[Progress] DB roadmap progress sync failed', e);
+    }
+}
+
 export const progressService = {
     getProgress,
+    getDbUserId,
 
     getRoadmapProgress(roadmapId: string): RoadmapProgress | undefined {
         const progress = getProgress();
@@ -46,7 +82,7 @@ export const progressService = {
         return rp?.completedLevels.includes(levelId) ?? false;
     },
 
-    completeLevel(roadmapId: string, topic: string, levelId: string, xpReward: number): UserProgress {
+    completeLevel(roadmapId: string, topic: string, levelId: string, xpReward: number, roadmapDbId?: number): UserProgress {
         const progress = getProgress();
         let rp = progress.roadmaps.find(r => r.roadmapId === roadmapId);
         if (!rp) {
@@ -60,10 +96,15 @@ export const progressService = {
         // Check for new rewards
         checkAndAwardRewards(progress);
         saveProgress(progress);
+
+        // Sync to DB (fire-and-forget)
+        syncToDb(progress);
+        if (roadmapDbId) syncRoadmapProgressToDb(roadmapDbId, rp);
+
         return progress;
     },
 
-    saveQuizResult(roadmapId: string, topic: string, result: QuizResult): UserProgress {
+    saveQuizResult(roadmapId: string, topic: string, result: QuizResult, roadmapDbId?: number): UserProgress {
         const progress = getProgress();
         let rp = progress.roadmaps.find(r => r.roadmapId === roadmapId);
         if (!rp) {
@@ -87,6 +128,11 @@ export const progressService = {
         }
         checkAndAwardRewards(progress);
         saveProgress(progress);
+
+        // Sync to DB (fire-and-forget)
+        syncToDb(progress);
+        if (roadmapDbId) syncRoadmapProgressToDb(roadmapDbId, rp);
+
         return progress;
     },
 

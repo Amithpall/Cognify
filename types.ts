@@ -59,6 +59,7 @@ export interface GeneratedRoadmap {
   topic: string;
   createdAt: string;
   levels: RoadmapLevel[];
+  dbId?: number;
 }
 
 export interface QuizQuestion {

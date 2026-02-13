@@ -1,6 +1,7 @@
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/llamaService';
+import * as api from '../services/apiService';
+import { progressService } from '../services/progressService';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -16,6 +17,27 @@ const ChatbotView: React.FC = () => {
   const [input, setInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Load chat history on mount
+  useEffect(() => {
+    const loadHistory = async () => {
+      const userId = progressService.getDbUserId();
+      if (!userId) return;
+      try {
+        const history = await api.getChatHistory(userId, 50);
+        if (history.length > 0) {
+          const formatted: Message[] = history.map((m: any) => ({
+            role: m.role as 'user' | 'assistant',
+            text: m.content
+          }));
+          setMessages(formatted);
+        }
+      } catch (err) {
+        console.error('Failed to load chat history:', err);
+      }
+    };
+    loadHistory();
+  }, []);
 
   // Auto-scroll on every message update
   const scrollToBottom = useCallback(() => {
@@ -41,16 +63,25 @@ const ChatbotView: React.FC = () => {
 
     setMessages(prev => [...prev, userMessage, assistantPlaceholder]);
 
+    // Save user message to DB
+    const userId = progressService.getDbUserId();
+    if (userId) {
+      api.saveMessage({ user_id: userId, role: 'user', content: userMsg }).catch(console.error);
+    }
+
     try {
       const chatHistory = [...messages, userMessage].map(m => ({
         role: m.role === 'user' ? 'user' as const : 'assistant' as const,
         content: m.text
       }));
 
+      let fullResponse = '';
+
       // Stream tokens directly — each onToken call updates the message INSTANTLY
       await aiService.chatStream(
         chatHistory,
         (accumulated) => {
+          fullResponse = accumulated;
           // Update the last message with accumulated text — zero delay
           setMessages(prev => {
             const updated = [...prev];
@@ -60,6 +91,12 @@ const ChatbotView: React.FC = () => {
         },
         SYSTEM_PROMPT
       );
+
+      // Save assistant response to DB after completion
+      if (userId && fullResponse) {
+        api.saveMessage({ user_id: userId, role: 'assistant', content: fullResponse }).catch(console.error);
+      }
+
     } catch (err) {
       console.error('Chat error:', err);
       setMessages(prev => {
@@ -72,6 +109,20 @@ const ChatbotView: React.FC = () => {
       });
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleClearChat = async () => {
+    if (confirm('Clear chat history?')) {
+      const userId = progressService.getDbUserId();
+      if (userId) {
+        try {
+          await api.clearChat(userId);
+        } catch (err) {
+          console.error('Failed to clear chat:', err);
+        }
+      }
+      setMessages([{ role: 'assistant', text: 'Chat cleared. How can I help you now?' }]);
     }
   };
 
@@ -92,6 +143,13 @@ const ChatbotView: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleClearChat}
+            className="text-xs text-slate-500 hover:text-red-400 transition-colors mr-2"
+            title="Clear Chat History"
+          >
+            <i className="fas fa-trash-alt"></i>
+          </button>
           <span className="text-[10px] px-2 py-0.5 bg-purple-500/20 text-purple-300 rounded-full border border-purple-500/30 font-semibold">Kimi K2.5</span>
         </div>
       </div>

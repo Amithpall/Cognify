@@ -89,6 +89,14 @@ export async function clearChat(userId: number) {
     return apiFetch(`/chat/${userId}`, { method: 'DELETE' });
 }
 
+export async function getConversationSessions(userId: number) {
+    return apiFetch(`/chat/${userId}/sessions`);
+}
+
+export async function getChatSessionMessages(userId: number, startTime: string, endTime: string) {
+    return apiFetch(`/chat/${userId}/session-messages?start=${encodeURIComponent(startTime)}&end=${encodeURIComponent(endTime)}`);
+}
+
 // ── Code History ──
 
 export async function saveCodeRun(data: {

@@ -246,6 +246,71 @@ router.post('/chat/batch', async (req, res) => {
     }
 });
 
+// Get conversation sessions (grouped by 30-min gaps)
+// NOTE: This route MUST come before GET /chat/:userId to avoid Express matching issues
+router.get('/chat/:userId/sessions', async (req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT id, role, LEFT(content, 80) AS preview, created_at FROM chat_messages WHERE user_id = $1 ORDER BY created_at ASC',
+            [req.params.userId]
+        );
+
+        if (result.rows.length === 0) return res.json([]);
+
+        const sessions = [];
+        let currentSession = { messages: [result.rows[0]], start: result.rows[0].created_at, end: result.rows[0].created_at };
+
+        for (let i = 1; i < result.rows.length; i++) {
+            const prev = new Date(result.rows[i - 1].created_at).getTime();
+            const curr = new Date(result.rows[i].created_at).getTime();
+            const gapMs = curr - prev;
+
+            if (gapMs > 30 * 60 * 1000) {
+                sessions.push(currentSession);
+                currentSession = { messages: [result.rows[i]], start: result.rows[i].created_at, end: result.rows[i].created_at };
+            } else {
+                currentSession.messages.push(result.rows[i]);
+                currentSession.end = result.rows[i].created_at;
+            }
+        }
+        sessions.push(currentSession);
+
+        const formatted = sessions.map((s, i) => {
+            const firstUser = s.messages.find(m => m.role === 'user');
+            return {
+                id: `session-${i}`,
+                preview: firstUser ? firstUser.preview : s.messages[0].preview,
+                date: new Date(s.start).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                messageCount: s.messages.length,
+                startTime: s.start,
+                endTime: s.end,
+            };
+        }).reverse();
+
+        res.json(formatted);
+    } catch (err) {
+        console.error('[API] Get sessions error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Get messages for a specific session (by time range)
+router.get('/chat/:userId/session-messages', async (req, res) => {
+    try {
+        const { start, end } = req.query;
+        if (!start || !end) return res.status(400).json({ error: 'start and end query params required' });
+
+        const result = await pool.query(
+            'SELECT * FROM chat_messages WHERE user_id = $1 AND created_at >= $2 AND created_at <= $3 ORDER BY created_at ASC',
+            [req.params.userId, start, end]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error('[API] Get session messages error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 // Get chat history for a user (last 100 messages)
 router.get('/chat/:userId', async (req, res) => {
     try {

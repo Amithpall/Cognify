@@ -8,12 +8,13 @@ interface LevelViewProps {
     level: RoadmapLevel;
     topic: string;
     roadmapId: string;
+    roadmapDbId?: number;
     onBack: () => void;
     onNext: () => void;
     isLastLevel: boolean;
 }
 
-const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, onBack, onNext, isLastLevel }) => {
+const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, roadmapDbId, onBack, onNext, isLastLevel }) => {
     const [subtopics, setSubtopics] = useState<Subtopic[]>(level.subtopics || []);
     const [activeSubtopicIdx, setActiveSubtopicIdx] = useState(-1);
     const [subtopicContent, setSubtopicContent] = useState<Record<string, string>>({});
@@ -123,8 +124,8 @@ const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, onBack, 
     }, [activeSubtopicIdx, activeSubtopic?.id]);
 
     const handleQuizSubmit = (result: QuizResult) => {
-        progressService.saveQuizResult(roadmapId, topic, result);
-        progressService.completeLevel(roadmapId, topic, level.id, level.xpReward);
+        progressService.saveQuizResult(roadmapId, topic, result, roadmapDbId);
+        progressService.completeLevel(roadmapId, topic, level.id, level.xpReward, roadmapDbId);
         setQuizCompleted(true);
         setXpEarned(level.xpReward);
     };
@@ -228,8 +229,8 @@ const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, onBack, 
                             <button
                                 onClick={() => setActiveSubtopicIdx(-1)}
                                 className={`w-full text-left p-3 rounded-xl text-sm font-semibold transition-all ${activeSubtopicIdx === -1
-                                        ? 'bg-indigo-600/20 border border-indigo-500/40 text-indigo-300'
-                                        : 'bg-slate-900/50 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600'
+                                    ? 'bg-indigo-600/20 border border-indigo-500/40 text-indigo-300'
+                                    : 'bg-slate-900/50 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600'
                                     }`}
                             >
                                 <div className="flex items-center gap-3">
@@ -257,8 +258,8 @@ const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, onBack, 
                                     key={sub.id}
                                     onClick={() => setActiveSubtopicIdx(idx)}
                                     className={`w-full text-left p-3 rounded-xl text-sm transition-all group ${activeSubtopicIdx === idx
-                                            ? 'bg-indigo-600/20 border border-indigo-500/40 text-indigo-300'
-                                            : 'bg-slate-900/50 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600'
+                                        ? 'bg-indigo-600/20 border border-indigo-500/40 text-indigo-300'
+                                        : 'bg-slate-900/50 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600'
                                         }`}
                                 >
                                     <div className="flex items-center gap-3">

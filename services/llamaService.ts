@@ -327,6 +327,74 @@ export class AIService {
             max_tokens: 2048,
         }, onToken);
     }
+
+    // ── Code Generation (streaming) ──
+    async generateCode(
+        prompt: string,
+        language: string,
+        onToken: (text: string) => void
+    ): Promise<string> {
+        return llamaChatStream({
+            messages: [
+                {
+                    role: 'system',
+                    content: `You are an expert ${language} programmer. Generate clean, well-commented, production-quality code. Return ONLY the code — no explanations, no markdown fences, no extra text. The code should be complete and runnable.`
+                },
+                {
+                    role: 'user',
+                    content: `Write ${language} code for: ${prompt}`
+                }
+            ],
+            temperature: 0.4,
+            max_tokens: 4096,
+        }, onToken);
+    }
+
+    // ── Detailed Code Insights (streaming) ──
+    async getDetailedInsights(
+        code: string,
+        language: string,
+        onToken: (text: string) => void
+    ): Promise<string> {
+        return llamaChatStream({
+            messages: [
+                {
+                    role: 'system',
+                    content: `You are a senior software engineer and expert code reviewer. Provide a thorough, detailed analysis of the given code. Structure your response with these sections using markdown headers:
+
+## 📋 Overview
+Brief summary of what the code does.
+
+## 🔍 Line-by-Line Explanation
+Walk through the key parts of the code explaining the logic.
+
+## 📊 Complexity Analysis
+- **Time Complexity**: Big-O analysis
+- **Space Complexity**: Big-O analysis
+
+## ✅ Strengths
+What the code does well (list 2-4 points).
+
+## ⚠️ Issues & Improvements
+Bugs, edge cases, or improvements (list 2-4 points with suggested fixes).
+
+## 💡 Best Practices
+Relevant best practices for this ${language} code.
+
+## 🎯 Readability Score: X/10
+## ⚡ Efficiency Score: X/10
+
+Be specific, reference actual lines/variables, and provide actionable suggestions.`
+                },
+                {
+                    role: 'user',
+                    content: `Analyze this ${language} code in complete detail:\n\n\`\`\`${language}\n${code}\n\`\`\``
+                }
+            ],
+            temperature: 0.4,
+            max_tokens: 4096,
+        }, onToken);
+    }
 }
 
 export const aiService = new AIService();

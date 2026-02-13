@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   const llamaUrl = (env.LLAMA_API_URL || 'http://localhost:11434/api/chat').replace(/\/+$/, '');
+  const apiPort = env.API_PORT || '3001';
 
   // Parse the URL to split origin and path
   const parsedUrl = new URL(llamaUrl);
@@ -17,7 +18,7 @@ export default defineConfig(({ mode }) => {
   return {
     server: {
       port: 3000,
-      strictPort: true,
+      strictPort: false,
       host: '0.0.0.0',
       proxy: {
         // Proxy /llm-api → FastAPI server (non-streaming, for JSON responses)
@@ -32,6 +33,11 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           rewrite: () => '/api/generate',
         },
+        // Proxy /api → Express backend
+        '/api': {
+          target: `http://localhost:${apiPort}`,
+          changeOrigin: true,
+        },
       },
     },
     plugins: [react()],
@@ -39,6 +45,7 @@ export default defineConfig(({ mode }) => {
       'process.env.LLAMA_API_URL': JSON.stringify(llamaUrl),
       'process.env.LLAMA_MODEL': JSON.stringify(env.LLAMA_MODEL || 'kimi-k2.5:cloud'),
       'process.env.LLAMA_API_KEY': JSON.stringify(env.LLAMA_API_KEY || ''),
+      'process.env.DATABASE_URL': JSON.stringify(env.DATABASE_URL || ''),
     },
     resolve: {
       alias: {

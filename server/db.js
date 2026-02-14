@@ -9,23 +9,24 @@ dotenv.config({ path: '.env.local' });
 const { Pool } = pg;
 
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: false,
+  connectionString: process.env.DATABASE_URL,
+  ssl: false,
 });
 
 // Test connection
 pool.query('SELECT NOW()')
-    .then(() => console.log('[DB] Connected to PostgreSQL'))
-    .catch(err => console.error('[DB] Connection failed:', err.message));
+  .then(() => console.log('[DB] Connected to PostgreSQL'))
+  .catch(err => console.error('[DB] Connection failed:', err.message));
 
 /**
  * Create all tables if they don't exist
  */
 export async function initTables() {
-    const client = await pool.connect();
-    try {
-        await client.query(`
-      -- Users table (synced from Google OAuth)
+  const start = Date.now();
+  const client = await pool.connect();
+  try {
+    // Core tables
+    await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         google_id VARCHAR(255) UNIQUE NOT NULL,
@@ -39,7 +40,6 @@ export async function initTables() {
         updated_at TIMESTAMP DEFAULT NOW()
       );
 
-      -- Roadmaps (unique per user+topic to prevent duplicates)
       CREATE TABLE IF NOT EXISTS roadmaps (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -50,7 +50,6 @@ export async function initTables() {
         UNIQUE(user_id, topic)
       );
 
-      -- User progress per roadmap
       CREATE TABLE IF NOT EXISTS user_progress (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -61,16 +60,15 @@ export async function initTables() {
         UNIQUE(user_id, roadmap_id)
       );
 
-      -- Chat messages
-      CREATE TABLE IF NOT EXISTS chat_messages (
+      -- Chat sessions (must exist before chat_messages references it)
+      CREATE TABLE IF NOT EXISTS chat_sessions (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        role VARCHAR(20) NOT NULL,
-        content TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW()
+        title VARCHAR(255) DEFAULT 'New Chat',
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
       );
 
-      -- Code playground history
       CREATE TABLE IF NOT EXISTS code_history (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -81,16 +79,83 @@ export async function initTables() {
         created_at TIMESTAMP DEFAULT NOW()
       );
 
-      -- Indexes
+      -- Group chat tables
+      CREATE TABLE IF NOT EXISTS chat_rooms (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        invite_code VARCHAR(20) UNIQUE NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS room_members (
+        id SERIAL PRIMARY KEY,
+        room_id INTEGER REFERENCES chat_rooms(id) ON DELETE CASCADE,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        joined_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(room_id, user_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS room_messages (
+        id SERIAL PRIMARY KEY,
+        room_id INTEGER REFERENCES chat_rooms(id) ON DELETE CASCADE,
+        user_id INTEGER REFERENCES users(id),
+        sender_name VARCHAR(255) NOT NULL,
+        role VARCHAR(20) NOT NULL DEFAULT 'user',
+        content TEXT NOT NULL,
+        persona VARCHAR(50),
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    // Handle chat_messages — might exist from older version without session_id
+    const tableCheck = await client.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables WHERE table_name = 'chat_messages'
+      )
+    `);
+
+    if (!tableCheck.rows[0].exists) {
+      await client.query(`
+        CREATE TABLE chat_messages (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+          session_id INTEGER REFERENCES chat_sessions(id) ON DELETE CASCADE,
+          role VARCHAR(20) NOT NULL,
+          content TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+      `);
+    } else {
+      const colCheck = await client.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.columns
+          WHERE table_name = 'chat_messages' AND column_name = 'session_id'
+        )
+      `);
+      if (!colCheck.rows[0].exists) {
+        console.log('[DB] Migrating chat_messages: adding session_id column...');
+        await client.query(`ALTER TABLE chat_messages ADD COLUMN session_id INTEGER REFERENCES chat_sessions(id) ON DELETE CASCADE`);
+        console.log('[DB] Migration complete');
+      }
+    }
+
+    // Indexes
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_roadmaps_user ON roadmaps(user_id);
       CREATE INDEX IF NOT EXISTS idx_progress_user ON user_progress(user_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
       CREATE INDEX IF NOT EXISTS idx_chat_user ON chat_messages(user_id);
-      CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_messages(user_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_room_members_room ON room_members(room_id);
+      CREATE INDEX IF NOT EXISTS idx_room_members_user ON room_members(user_id);
+      CREATE INDEX IF NOT EXISTS idx_room_messages_room ON room_messages(room_id);
     `);
-        console.log('[DB] Tables initialized');
-    } finally {
-        client.release();
-    }
+
+    console.log(`[DB] Tables initialized ${Date.now() - start} ms`);
+  } finally {
+    client.release();
+  }
 }
 
 export default pool;

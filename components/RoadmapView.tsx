@@ -6,6 +6,21 @@ import * as api from '../services/apiService';
 import TopicSelector from './TopicSelector';
 import LevelView from './LevelView';
 
+const ROADMAP_CACHE_KEY = 'cognify_roadmaps';
+
+function getCachedRoadmaps(): GeneratedRoadmap[] {
+  try {
+    const stored = localStorage.getItem(ROADMAP_CACHE_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch { return []; }
+}
+
+function setCachedRoadmaps(roadmaps: GeneratedRoadmap[]) {
+  try {
+    localStorage.setItem(ROADMAP_CACHE_KEY, JSON.stringify(roadmaps));
+  } catch (e) { console.warn('Failed to cache roadmaps:', e); }
+}
+
 type ViewState = 'topic-select' | 'roadmap' | 'level';
 
 const COMMUNITIES = [
@@ -57,13 +72,14 @@ const CircularProgress: React.FC<{ percent: number; size?: number; strokeWidth?:
 
 const RoadmapView: React.FC = () => {
   const [viewState, setViewState] = useState<ViewState>('topic-select');
-  const [roadmaps, setRoadmaps] = useState<GeneratedRoadmap[]>([]);
+  const [roadmaps, setRoadmaps] = useState<GeneratedRoadmap[]>(() => getCachedRoadmaps());
   const [currentRoadmap, setCurrentRoadmap] = useState<GeneratedRoadmap | null>(null);
   const [currentLevel, setCurrentLevel] = useState<RoadmapLevel | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
+  const [progressVersion, setProgressVersion] = useState(0);
 
-  // Load roadmaps from DB on mount
+  // Load roadmaps + progress from DB on mount
   useEffect(() => {
     const loadRoadmaps = async () => {
       const userId = progressService.getDbUserId();
@@ -72,15 +88,48 @@ const RoadmapView: React.FC = () => {
         return;
       }
       try {
+        // Load roadmaps
         const saved = await api.getUserRoadmaps(userId);
-        // Map DB fields to frontend format
         const formatted: GeneratedRoadmap[] = saved.map((r: any) => ({
-          id: String(r.id), // Use DB ID
+          id: String(r.id),
           topic: r.topic,
           levels: r.levels || [],
+          createdAt: r.created_at || new Date().toISOString(),
           dbId: r.id
         }));
         setRoadmaps(formatted);
+        setCachedRoadmaps(formatted);
+
+        // Load all progress and merge into localStorage
+        try {
+          const allProgress = await api.getAllProgress(userId);
+          if (allProgress?.length) {
+            for (const p of allProgress) {
+              const roadmapId = String(p.roadmap_id);
+              const completedLevels = p.completed_levels || [];
+              const quizResults = p.quiz_results || [];
+              const matchingRoadmap = formatted.find(r => r.id === roadmapId);
+              if (matchingRoadmap && completedLevels.length > 0) {
+                const localProgress = progressService.getRoadmapProgress(roadmapId);
+                if (!localProgress || localProgress.completedLevels.length < completedLevels.length) {
+                  // DB has more progress — merge in
+                  const progress = progressService.getProgress();
+                  let rp = progress.roadmaps.find(r => r.roadmapId === roadmapId);
+                  if (!rp) {
+                    rp = { roadmapId, topic: matchingRoadmap.topic, completedLevels: [], quizResults: [] };
+                    progress.roadmaps.push(rp);
+                  }
+                  rp.completedLevels = completedLevels;
+                  rp.quizResults = quizResults;
+                  localStorage.setItem('cognify_progress', JSON.stringify(progress));
+                }
+              }
+            }
+            setProgressVersion(v => v + 1);
+          }
+        } catch (err) {
+          console.warn('Failed to load progress from DB:', err);
+        }
       } catch (err) {
         console.error('Failed to load roadmaps:', err);
       } finally {
@@ -104,10 +153,10 @@ const RoadmapView: React.FC = () => {
         order: i + 1,
         title: l.title,
         description: l.description,
-        theoryContent: '', // Generated lazily
-        subtopics: [],     // Generated lazily
+        theoryContent: '',
+        subtopics: [],
         xpReward: l.xpReward,
-        quiz: []           // Generated lazily
+        quiz: []
       }));
 
       // 2. Save to DB (handle duplicates)
@@ -128,26 +177,32 @@ const RoadmapView: React.FC = () => {
           dbId: saved.id
         };
 
-        // If returned existing, use that
         if (saved.existing) {
           console.log(`Using existing roadmap for topic: ${topic}`);
-          // Update local state to ensure it's in the list
           setRoadmaps(prev => {
-            const others = prev.filter(r => r.dbId !== saved.id);
-            return [newRoadmap, ...others];
+            const updated = [newRoadmap, ...prev.filter(r => r.dbId !== saved.id)];
+            setCachedRoadmaps(updated);
+            return updated;
           });
         } else {
-          setRoadmaps(prev => [newRoadmap, ...prev]);
+          setRoadmaps(prev => {
+            const updated = [newRoadmap, ...prev];
+            setCachedRoadmaps(updated);
+            return updated;
+          });
         }
       } else {
-        // Fallback for guest (no DB)
         newRoadmap = {
           id: crypto.randomUUID(),
           topic,
           levels,
           createdAt: new Date().toISOString()
         };
-        setRoadmaps(prev => [newRoadmap, ...prev]);
+        setRoadmaps(prev => {
+          const updated = [newRoadmap, ...prev];
+          setCachedRoadmaps(updated);
+          return updated;
+        });
       }
 
       setCurrentRoadmap(newRoadmap);
@@ -175,7 +230,11 @@ const RoadmapView: React.FC = () => {
           console.error('Failed to delete roadmap:', err);
         }
       }
-      setRoadmaps(prev => prev.filter(r => r.id !== id));
+      setRoadmaps(prev => {
+        const updated = prev.filter(r => r.id !== id);
+        setCachedRoadmaps(updated);
+        return updated;
+      });
       if (currentRoadmap?.id === id) {
         setViewState('topic-select');
         setCurrentRoadmap(null);
@@ -188,15 +247,51 @@ const RoadmapView: React.FC = () => {
     setViewState('level');
   };
 
-  const handleBack = () => {
-    if (viewState === 'level') {
+  // Called when user completes quiz / finishes level — proper state restoration
+  const handleLevelComplete = useCallback((levelId: string, xp: number) => {
+    if (!currentRoadmap) return;
+    progressService.completeLevel(
+      currentRoadmap.id,
+      currentRoadmap.topic,
+      levelId,
+      xp,
+      currentRoadmap.dbId
+    );
+    // Force re-render so unlock status updates
+    setProgressVersion(v => v + 1);
+  }, [currentRoadmap]);
+
+  const handleNextLevel = useCallback(() => {
+    if (!currentRoadmap || !currentLevel) return;
+    const idx = currentRoadmap.levels.findIndex(l => l.id === currentLevel.id);
+    if (idx >= 0 && idx < currentRoadmap.levels.length - 1) {
+      setCurrentLevel(currentRoadmap.levels[idx + 1]);
+    } else {
+      // Last level — go back to roadmap
       setViewState('roadmap');
       setCurrentLevel(null);
-    } else {
-      setViewState('topic-select');
-      setCurrentRoadmap(null);
     }
-  };
+  }, [currentRoadmap, currentLevel]);
+
+  const handleBack = useCallback(() => {
+    setViewState(prev => {
+      if (prev === 'level') {
+        setCurrentLevel(null);
+        return 'roadmap';
+      } else {
+        setCurrentRoadmap(null);
+        return 'topic-select';
+      }
+    });
+  }, []);
+
+  // Recovery: if we're in a state that requires currentRoadmap but it's null, go back
+  useEffect(() => {
+    if ((viewState === 'roadmap' || viewState === 'level') && !currentRoadmap) {
+      setViewState('topic-select');
+      setCurrentLevel(null);
+    }
+  }, [viewState, currentRoadmap]);
 
   // ── Render Views ──
 
@@ -281,22 +376,17 @@ const RoadmapView: React.FC = () => {
   // ── Detail / Level View ──
 
   if (viewState === 'level' && currentLevel && currentRoadmap) {
+    const currentIdx = currentRoadmap.levels.findIndex(l => l.id === currentLevel.id);
+    const isLastLevel = currentIdx === currentRoadmap.levels.length - 1;
     return (
       <LevelView
         level={currentLevel}
         roadmapId={currentRoadmap.id}
-        roadmapDbId={currentRoadmap.dbId} // Pass DB ID for persistence
+        roadmapDbId={currentRoadmap.dbId}
         topic={currentRoadmap.topic}
         onBack={handleBack}
-        onComplete={(xp) => {
-          progressService.completeLevel(
-            currentRoadmap.id,
-            currentRoadmap.topic,
-            currentLevel.id,
-            xp,
-            currentRoadmap.dbId // Sync to DB
-          );
-        }}
+        onNext={handleNextLevel}
+        isLastLevel={isLastLevel}
       />
     );
   }
@@ -377,7 +467,8 @@ const RoadmapView: React.FC = () => {
         </div>
 
         {/* Right: Progress Sidebar */}
-        <aside className="hidden lg:flex flex-col w-[280px] space-y-4 pt-20 animate-fade-in-up">
+        <aside className="hidden lg:flex flex-col w-[300px] space-y-4 pt-20 animate-fade-in-up sidebar-scroll overflow-y-auto max-h-[calc(100vh-120px)]">
+          {/* Progress Ring */}
           <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-6 flex flex-col items-center">
             <h3 className="text-sm font-bold text-slate-300 mb-4 uppercase tracking-wider">Roadmap Progress</h3>
             <div className="animate-fade-in-up">
@@ -389,8 +480,70 @@ const RoadmapView: React.FC = () => {
             </div>
           </div>
 
+          {/* Milestones */}
+          <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-5 animate-fade-in-up delay-100">
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Milestones</h3>
+            <div className="space-y-3">
+              {[
+                { pct: 25, label: 'Getting Started', icon: 'fa-seedling', color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
+                { pct: 50, label: 'Halfway There', icon: 'fa-fire', color: 'text-orange-400', bg: 'bg-orange-500/10' },
+                { pct: 75, label: 'Almost Done', icon: 'fa-rocket', color: 'text-purple-400', bg: 'bg-purple-500/10' },
+                { pct: 100, label: 'Master', icon: 'fa-crown', color: 'text-yellow-400', bg: 'bg-yellow-500/10' },
+              ].map(m => {
+                const reached = progressPercent >= m.pct;
+                return (
+                  <div key={m.pct} className={`flex items-center gap-3 p-2.5 rounded-xl transition-all ${reached ? `${m.bg} border border-white/5` : 'opacity-40'}`}>
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${reached ? m.bg : 'bg-slate-800'}`}>
+                      <i className={`fas ${m.icon} ${reached ? m.color : 'text-slate-600'} text-sm`}></i>
+                    </div>
+                    <div className="flex-1">
+                      <p className={`text-xs font-bold ${reached ? 'text-white' : 'text-slate-500'}`}>{m.label}</p>
+                      <p className="text-[10px] text-slate-500">{m.pct}% completion</p>
+                    </div>
+                    {reached && <i className="fas fa-check-circle text-emerald-400 text-xs"></i>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Analysis */}
+          <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-5 animate-fade-in-up delay-200">
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Analysis</h3>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400"><i className="fas fa-clock text-blue-400 mr-1.5"></i>Est. Time</span>
+                <span className="text-xs font-bold text-blue-300">{totalLevels * 25} min</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400"><i className="fas fa-bolt text-yellow-400 mr-1.5"></i>Total XP</span>
+                <span className="text-xs font-bold text-yellow-300">{currentRoadmap.levels.reduce((sum, l) => sum + (l.xpReward || 0), 0)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400"><i className="fas fa-layer-group text-cyan-400 mr-1.5"></i>Depth</span>
+                <span className="text-xs font-bold text-cyan-300">{totalLevels} levels</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400"><i className="fas fa-chart-line text-purple-400 mr-1.5"></i>Difficulty</span>
+                <span className="text-xs font-bold text-purple-300">
+                  {totalLevels <= 4 ? 'Beginner' : totalLevels <= 7 ? 'Intermediate' : 'Advanced'}
+                </span>
+              </div>
+              {/* Topic coverage bar */}
+              <div className="pt-2 border-t border-slate-700/50">
+                <p className="text-[10px] text-slate-500 mb-2">Coverage</p>
+                <div className="h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-700"
+                    style={{ width: `${progressPercent}%` }}
+                  ></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Community Chats */}
-          <div className="bg-slate-800/50 border border-slate-700 rounded-2xl overflow-hidden animate-fade-in-up delay-100">
+          <div className="bg-slate-800/50 border border-slate-700 rounded-2xl overflow-hidden animate-fade-in-up delay-300">
             <div className="px-5 py-3 border-b border-slate-700 bg-slate-800/80">
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Community Hub</h3>
             </div>
@@ -421,7 +574,15 @@ const RoadmapView: React.FC = () => {
     );
   }
 
-  return null;
+  // Fallback — should not reach, redirect to topic-select
+  return (
+    <div className="flex items-center justify-center h-64">
+      <div className="text-center">
+        <i className="fas fa-circle-notch animate-spin text-2xl text-indigo-400 mb-4 block"></i>
+        <p className="text-slate-400 text-sm">Loading...</p>
+      </div>
+    </div>
+  );
 };
 
 export default RoadmapView;

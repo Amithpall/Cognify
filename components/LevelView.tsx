@@ -151,8 +151,8 @@ const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, roadmapD
     }, [activeSubtopicIdx, activeSubtopic?.id]);
 
     const handleQuizSubmit = (result: QuizResult) => {
-        progressService.saveQuizResult(roadmapId, topic, result);
-        progressService.completeLevel(roadmapId, topic, level.id, level.xpReward);
+        progressService.saveQuizResult(roadmapId, topic, result, roadmapDbId);
+        progressService.completeLevel(roadmapId, topic, level.id, level.xpReward, roadmapDbId);
         setQuizCompleted(true);
         setXpEarned(level.xpReward);
     };

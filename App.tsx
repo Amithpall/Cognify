@@ -26,6 +26,7 @@ const App: React.FC = () => {
           <Route path="/chatbot" element={<ChatbotView />} />
           <Route path="/leaderboard" element={<LeaderboardView />} />
           <Route path="/notes" element={<NotesPlaceholder />} />
+          <Route path="*" element={<Navigate to="/roadmap" />} />
         </Route>
       </Routes>
     </Router>

@@ -2,18 +2,20 @@ import React, { useState, useEffect, useRef } from 'react';
 import { RoadmapLevel, Subtopic, QuizQuestion, QuizResult } from '../types';
 import { aiService } from '../services/llamaService';
 import { progressService } from '../services/progressService';
+import * as api from '../services/apiService';
 import QuizView from './QuizView';
 
 interface LevelViewProps {
     level: RoadmapLevel;
     topic: string;
     roadmapId: string;
+    roadmapDbId?: number;
     onBack: () => void;
     onNext: () => void;
     isLastLevel: boolean;
 }
 
-const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, onBack, onNext, isLastLevel }) => {
+const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, roadmapDbId, onBack, onNext, isLastLevel }) => {
     const [subtopics, setSubtopics] = useState<Subtopic[]>(level.subtopics || []);
     const [activeSubtopicIdx, setActiveSubtopicIdx] = useState(-1);
     const [subtopicContent, setSubtopicContent] = useState<Record<string, string>>({});
@@ -33,6 +35,16 @@ const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, onBack, 
     const isCompleted = progressService.isLevelCompleted(roadmapId, level.id);
     const activeSubtopic = activeSubtopicIdx >= 0 ? subtopics[activeSubtopicIdx] : null;
 
+    // Helper to persist content changes
+    const saveLevelContent = async (updates: { theoryContent?: string; subtopics?: Subtopic[]; quiz?: QuizQuestion[] }) => {
+        if (!roadmapDbId) return;
+        try {
+            await api.updateRoadmapLevel(roadmapDbId, level.id, updates);
+        } catch (e) {
+            console.error('Failed to save level content:', e);
+        }
+    };
+
     // ── Load everything in PARALLEL ──
     useEffect(() => {
         let cancelled = false;
@@ -42,14 +54,16 @@ const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, onBack, 
             setLoadingOverview(true);
             setIsStreaming(true);
             try {
-                // TRUE STREAMING: tokens appear instantly as Ollama generates them
                 const content = await aiService.generateLevelContentStream(
                     topic, level.title, level.description,
                     (accumulated) => {
                         if (!cancelled) setOverviewContent(accumulated);
                     }
                 );
-                if (!cancelled) level.theoryContent = content;
+                if (!cancelled) {
+                    level.theoryContent = content;
+                    saveLevelContent({ theoryContent: content });
+                }
             } catch (err) {
                 if (!cancelled) setError('Failed to load overview.');
                 console.error(err);
@@ -69,7 +83,11 @@ const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, onBack, 
                     description: s.description,
                     content: '',
                 }));
-                if (!cancelled) { setSubtopics(mapped); level.subtopics = mapped; }
+                if (!cancelled) {
+                    setSubtopics(mapped);
+                    level.subtopics = mapped;
+                    saveLevelContent({ subtopics: mapped });
+                }
             } catch (err) {
                 if (!cancelled) console.error('Failed to load subtopics:', err);
             } finally {
@@ -83,7 +101,11 @@ const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, onBack, 
             try {
                 const questions = await aiService.generateQuiz(topic, level.title);
                 const mapped: QuizQuestion[] = questions.map((q, i) => ({ id: `${level.id}-q${i}`, ...q }));
-                if (!cancelled) { setQuizQuestions(mapped); level.quiz = mapped; }
+                if (!cancelled) {
+                    setQuizQuestions(mapped);
+                    level.quiz = mapped;
+                    saveLevelContent({ quiz: mapped });
+                }
             } catch (err) {
                 if (!cancelled) console.error('Failed to load quiz:', err);
             } finally {
@@ -115,7 +137,13 @@ const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, onBack, 
                 }
             }
         )
-            .then((content) => { if (!cancelled) activeSubtopic.content = content; })
+            .then((content) => {
+                if (!cancelled) {
+                    activeSubtopic.content = content;
+                    // We need to save the entire subtopics array because it changed
+                    saveLevelContent({ subtopics: subtopics });
+                }
+            })
             .catch((err) => { if (!cancelled) setError('Failed to load subtopic.'); console.error(err); })
             .finally(() => { if (!cancelled) { setLoadingContent(false); setIsStreaming(false); } });
 
@@ -228,8 +256,8 @@ const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, onBack, 
                             <button
                                 onClick={() => setActiveSubtopicIdx(-1)}
                                 className={`w-full text-left p-3 rounded-xl text-sm font-semibold transition-all ${activeSubtopicIdx === -1
-                                        ? 'bg-indigo-600/20 border border-indigo-500/40 text-indigo-300'
-                                        : 'bg-slate-900/50 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600'
+                                    ? 'bg-indigo-600/20 border border-indigo-500/40 text-indigo-300'
+                                    : 'bg-slate-900/50 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600'
                                     }`}
                             >
                                 <div className="flex items-center gap-3">
@@ -257,8 +285,8 @@ const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, onBack, 
                                     key={sub.id}
                                     onClick={() => setActiveSubtopicIdx(idx)}
                                     className={`w-full text-left p-3 rounded-xl text-sm transition-all group ${activeSubtopicIdx === idx
-                                            ? 'bg-indigo-600/20 border border-indigo-500/40 text-indigo-300'
-                                            : 'bg-slate-900/50 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600'
+                                        ? 'bg-indigo-600/20 border border-indigo-500/40 text-indigo-300'
+                                        : 'bg-slate-900/50 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600'
                                         }`}
                                 >
                                     <div className="flex items-center gap-3">

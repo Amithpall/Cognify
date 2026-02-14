@@ -129,7 +129,61 @@ router.get('/roadmaps/:id', async (req, res) => {
     }
 });
 
-// Delete roadmap
+// Update a specific level within a roadmap
+router.put('/roadmaps/:id/levels', async (req, res) => {
+    try {
+        const { levelId, theoryContent, subtopics, quiz } = req.body;
+        if (!levelId) return res.status(400).json({ error: 'levelId required' });
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Get current levels
+            const roadmapRes = await client.query('SELECT levels FROM roadmaps WHERE id = $1 FOR UPDATE', [req.params.id]);
+            if (roadmapRes.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ error: 'Roadmap not found' });
+            }
+
+            let levels = roadmapRes.rows[0].levels;
+            let found = false;
+
+            // Update the specific level
+            levels = levels.map(l => {
+                if (l.id === levelId) {
+                    found = true;
+                    return {
+                        ...l,
+                        theoryContent: theoryContent !== undefined ? theoryContent : l.theoryContent,
+                        subtopics: subtopics !== undefined ? subtopics : l.subtopics,
+                        quiz: quiz !== undefined ? quiz : l.quiz
+                    };
+                }
+                return l;
+            });
+
+            if (!found) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ error: 'Level not found' });
+            }
+
+            // Save back
+            await client.query('UPDATE roadmaps SET levels = $1 WHERE id = $2', [JSON.stringify(levels), req.params.id]);
+            await client.query('COMMIT');
+
+            res.json({ success: true });
+        } catch (e) {
+            await client.query('ROLLBACK');
+            throw e;
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error('[API] Update level error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
 router.delete('/roadmaps/:id', async (req, res) => {
     try {
         await pool.query('DELETE FROM roadmaps WHERE id = $1', [req.params.id]);

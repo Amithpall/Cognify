@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { GeneratedRoadmap, RoadmapLevel } from '../types';
 import { aiService } from '../services/llamaService';
 import { progressService, REWARDS } from '../services/progressService';
@@ -56,6 +57,7 @@ const CircularProgress: React.FC<{ percent: number; size?: number; strokeWidth?:
 };
 
 const RoadmapView: React.FC = () => {
+  const { dbUserId } = useOutletContext<{ dbUserId: number | null }>();
   const [viewState, setViewState] = useState<ViewState>('topic-select');
   const [roadmaps, setRoadmaps] = useState<GeneratedRoadmap[]>([]);
   const [currentRoadmap, setCurrentRoadmap] = useState<GeneratedRoadmap | null>(null);
@@ -63,16 +65,22 @@ const RoadmapView: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
 
-  // Load roadmaps from DB on mount
+  // Load roadmaps from DB when dbUserId becomes available
   useEffect(() => {
     const loadRoadmaps = async () => {
-      const userId = progressService.getDbUserId();
-      if (!userId) {
+      if (!dbUserId) {
+        // Only set loading to false if we tried to load but failed, 
+        // OR if we rely on initial mount. 
+        // If waiting for dbUserID, keep loading? No, user might not be logged in.
+        // But in Dashboard we upsert user. So dbUserId should eventually arrive.
+        // Let's keep loading true until we check.
+        // Actually, if guest, dbUserId stays null.
         setLoadingHistory(false);
         return;
       }
+      setLoadingHistory(true);
       try {
-        const saved = await api.getUserRoadmaps(userId);
+        const saved = await api.getUserRoadmaps(dbUserId);
         // Map DB fields to frontend format
         const formatted: GeneratedRoadmap[] = saved.map((r: any) => ({
           id: String(r.id), // Use DB ID
@@ -88,13 +96,11 @@ const RoadmapView: React.FC = () => {
       }
     };
     loadRoadmaps();
-  }, []);
+  }, [dbUserId]);
 
   const handleGenerate = async (topic: string) => {
     setIsGenerating(true);
     try {
-      const userId = progressService.getDbUserId();
-
       // 1. Generate roadmap content via AI
       const rawLevels = await aiService.generateRoadmap(topic);
 
@@ -113,9 +119,9 @@ const RoadmapView: React.FC = () => {
       // 2. Save to DB (handle duplicates)
       let newRoadmap: GeneratedRoadmap;
 
-      if (userId) {
+      if (dbUserId) {
         const saved = await api.createRoadmap({
-          user_id: userId,
+          user_id: dbUserId,
           topic: topic,
           levels: levels
         });
@@ -133,6 +139,7 @@ const RoadmapView: React.FC = () => {
           console.log(`Using existing roadmap for topic: ${topic}`);
           // Update local state to ensure it's in the list
           setRoadmaps(prev => {
+            // Remove if already present to avoid dups, then unshift
             const others = prev.filter(r => r.dbId !== saved.id);
             return [newRoadmap, ...others];
           });

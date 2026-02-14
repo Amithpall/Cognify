@@ -53,6 +53,17 @@ export async function deleteRoadmap(id: number) {
     return apiFetch(`/roadmaps/${id}`, { method: 'DELETE' });
 }
 
+export async function updateRoadmapLevel(roadmapId: number, levelId: string, data: {
+    theoryContent?: string;
+    subtopics?: any[];
+    quiz?: any[];
+}) {
+    return apiFetch(`/roadmaps/${roadmapId}/levels`, {
+        method: 'PUT',
+        body: JSON.stringify({ levelId, ...data })
+    });
+}
+
 // ── Progress ──
 
 export async function upsertProgress(data: {

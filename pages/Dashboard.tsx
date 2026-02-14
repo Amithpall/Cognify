@@ -46,6 +46,12 @@ const Dashboard: React.FC = () => {
     return baseUser;
   });
 
+  // Store DB User ID in state to pass to children context
+  const [dbUserId, setDbUserId] = useState<number | null>(() => {
+    const stored = localStorage.getItem('db_user_id');
+    return stored ? parseInt(stored, 10) : null;
+  });
+
   // Sync user to PostgreSQL on mount
   useEffect(() => {
     const syncUser = async () => {
@@ -64,6 +70,7 @@ const Dashboard: React.FC = () => {
 
         // Store the DB user ID for other services to use
         localStorage.setItem('db_user_id', String(dbUser.id));
+        setDbUserId(dbUser.id);
 
         // Update user state with DB data if it has more XP
         if (dbUser.xp > (user.xp || 0)) {
@@ -88,7 +95,7 @@ const Dashboard: React.FC = () => {
 
   return (
     <Layout user={displayUser} activeTab={activeTab}>
-      <Outlet />
+      <Outlet context={{ dbUserId, user: displayUser }} />
     </Layout>
   );
 };

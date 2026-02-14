@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { aiService } from '../services/llamaService';
 import * as api from '../services/apiService';
 import { progressService } from '../services/progressService';
@@ -11,6 +12,7 @@ interface Message {
 const SYSTEM_PROMPT = "You are a senior AI Learning Tutor at Cognify. Explain complex AI concepts simply, use analogies, and encourage students. Be concise but thorough.";
 
 const ChatbotView: React.FC = () => {
+  const { dbUserId } = useOutletContext<{ dbUserId: number | null }>();
   const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', text: 'Hello! I am your AI Learning Tutor powered by Kimi K2.5. Ask me anything about Machine Learning, Neural Networks, or help with your roadmap.' }
   ]);
@@ -18,13 +20,12 @@ const ChatbotView: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Load chat history on mount
+  // Load chat history on dbUserId change
   useEffect(() => {
     const loadHistory = async () => {
-      const userId = progressService.getDbUserId();
-      if (!userId) return;
+      if (!dbUserId) return;
       try {
-        const history = await api.getChatHistory(userId, 50);
+        const history = await api.getChatHistory(dbUserId, 50);
         if (history.length > 0) {
           const formatted: Message[] = history.map((m: any) => ({
             role: m.role as 'user' | 'assistant',
@@ -37,7 +38,7 @@ const ChatbotView: React.FC = () => {
       }
     };
     loadHistory();
-  }, []);
+  }, [dbUserId]);
 
   // Auto-scroll on every message update
   const scrollToBottom = useCallback(() => {
@@ -64,9 +65,8 @@ const ChatbotView: React.FC = () => {
     setMessages(prev => [...prev, userMessage, assistantPlaceholder]);
 
     // Save user message to DB
-    const userId = progressService.getDbUserId();
-    if (userId) {
-      api.saveMessage({ user_id: userId, role: 'user', content: userMsg }).catch(console.error);
+    if (dbUserId) {
+      api.saveMessage({ user_id: dbUserId, role: 'user', content: userMsg }).catch(console.error);
     }
 
     try {
@@ -93,8 +93,8 @@ const ChatbotView: React.FC = () => {
       );
 
       // Save assistant response to DB after completion
-      if (userId && fullResponse) {
-        api.saveMessage({ user_id: userId, role: 'assistant', content: fullResponse }).catch(console.error);
+      if (dbUserId && fullResponse) {
+        api.saveMessage({ user_id: dbUserId, role: 'assistant', content: fullResponse }).catch(console.error);
       }
 
     } catch (err) {
@@ -114,10 +114,9 @@ const ChatbotView: React.FC = () => {
 
   const handleClearChat = async () => {
     if (confirm('Clear chat history?')) {
-      const userId = progressService.getDbUserId();
-      if (userId) {
+      if (dbUserId) {
         try {
-          await api.clearChat(userId);
+          await api.clearChat(dbUserId);
         } catch (err) {
           console.error('Failed to clear chat:', err);
         }

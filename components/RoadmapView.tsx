@@ -273,15 +273,25 @@ const RoadmapView: React.FC = () => {
     }
   }, [currentRoadmap, currentLevel]);
 
-  const handleBack = () => {
-    if (viewState === 'level') {
-      setViewState('roadmap');
-      setCurrentLevel(null);
-    } else {
+  const handleBack = useCallback(() => {
+    setViewState(prev => {
+      if (prev === 'level') {
+        setCurrentLevel(null);
+        return 'roadmap';
+      } else {
+        setCurrentRoadmap(null);
+        return 'topic-select';
+      }
+    });
+  }, []);
+
+  // Recovery: if we're in a state that requires currentRoadmap but it's null, go back
+  useEffect(() => {
+    if ((viewState === 'roadmap' || viewState === 'level') && !currentRoadmap) {
       setViewState('topic-select');
-      setCurrentRoadmap(null);
+      setCurrentLevel(null);
     }
-  };
+  }, [viewState, currentRoadmap]);
 
   // ── Render Views ──
 

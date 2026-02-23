@@ -144,7 +144,37 @@ const RoadmapView: React.FC = () => {
     try {
       const userId = progressService.getDbUserId();
 
-      // 1. Generate roadmap content via AI
+      // 1. FIRST check if roadmap already exists in DB (before generating)
+      let existingRoadmap = null;
+      if (userId) {
+        try {
+          const checkResult = await api.checkRoadmapExists(userId, topic);
+          if (checkResult.exists) {
+            // Use existing roadmap - no need to generate
+            console.log(`Using existing roadmap for topic: ${topic}`);
+            existingRoadmap = {
+              id: String(checkResult.roadmap.id),
+              topic: checkResult.roadmap.topic,
+              levels: checkResult.roadmap.levels,
+              createdAt: checkResult.roadmap.created_at || new Date().toISOString(),
+              dbId: checkResult.roadmap.id
+            };
+            setRoadmaps(prev => {
+              const updated = [existingRoadmap!, ...prev.filter(r => r.dbId !== checkResult.roadmap.id)];
+              setCachedRoadmaps(updated);
+              return updated;
+            });
+            setCurrentRoadmap(existingRoadmap);
+            setViewState('roadmap');
+            return; // Exit early - don't generate duplicate
+          }
+        } catch (checkErr) {
+          console.warn('Failed to check existing roadmap:', checkErr);
+          // Continue with generation if check fails
+        }
+      }
+
+      // 2. Generate roadmap content via AI (only if no existing roadmap)
       const rawLevels = await aiService.generateRoadmap(topic);
 
       // Map raw levels to full RoadmapLevel objects
@@ -274,16 +304,24 @@ const RoadmapView: React.FC = () => {
   }, [currentRoadmap, currentLevel]);
 
   const handleBack = useCallback(() => {
-    setViewState(prev => {
-      if (prev === 'level') {
-        setCurrentLevel(null);
-        return 'roadmap';
-      } else {
-        setCurrentRoadmap(null);
-        return 'topic-select';
-      }
-    });
-  }, []);
+    console.log('[RoadmapView] handleBack called, current view:', viewState);
+    if (viewState === 'level') {
+      setCurrentLevel(null);
+      setViewState('roadmap');
+      console.log('[RoadmapView] Going back to roadmap view');
+    } else if (viewState === 'roadmap') {
+      // Keep the current roadmap when going back to topic-select
+      const roadmapToKeep = currentRoadmap;
+      setViewState('topic-select');
+      // Restore the roadmap after state change
+      setTimeout(() => {
+        if (roadmapToKeep) {
+          setCurrentRoadmap(roadmapToKeep);
+        }
+      }, 0);
+      console.log('[RoadmapView] Going back to topic-select, keeping roadmap');
+    }
+  }, [viewState, currentRoadmap]);
 
   // Recovery: if we're in a state that requires currentRoadmap but it's null, go back
   useEffect(() => {

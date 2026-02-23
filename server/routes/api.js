@@ -68,17 +68,43 @@ router.put('/users/:id/xp', async (req, res) => {
 //  ROADMAPS
 // ══════════════════════════════════════════
 
+// Check if roadmap exists before generating (for frontend to avoid duplicate generation)
+router.get('/roadmaps/check', async (req, res) => {
+    try {
+        const { user_id, topic } = req.query;
+        if (!user_id || !topic) return res.status(400).json({ error: 'user_id and topic required' });
+        const existing = await pool.query(
+            'SELECT * FROM roadmaps WHERE user_id = $1 AND LOWER(topic) = LOWER($2)',
+            [user_id, topic]
+        );
+        if (existing.rows.length > 0) {
+            return res.json({ exists: true, roadmap: existing.rows[0] });
+        }
+        res.json({ exists: false });
+    } catch (err) {
+        console.error('[API] Check roadmap error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 router.post('/roadmaps', async (req, res) => {
     try {
         const { user_id, client_id, topic, levels } = req.body;
         if (!topic || !levels) return res.status(400).json({ error: 'topic and levels required' });
         log('Roadmaps', `Create: "${topic}" for user=${user_id}`);
+
+        // Check for existing roadmap FIRST - before any generation
         if (user_id) {
             const existing = await pool.query(
-                'SELECT * FROM roadmaps WHERE user_id = $1 AND LOWER(topic) = LOWER($2)', [user_id, topic]
+                'SELECT * FROM roadmaps WHERE user_id = $1 AND LOWER(topic) = LOWER($2)',
+                [user_id, topic]
             );
-            if (existing.rows.length > 0) return res.json({ ...existing.rows[0], existing: true });
+            if (existing.rows.length > 0) {
+                // Return existing roadmap - don't create duplicates
+                return res.json({ ...existing.rows[0], existing: true });
+            }
         }
+
         const result = await pool.query(`
       INSERT INTO roadmaps (user_id, client_id, topic, levels) VALUES ($1, $2, $3, $4) RETURNING *
     `, [user_id || null, client_id || null, topic, JSON.stringify(levels)]);
@@ -86,7 +112,8 @@ router.post('/roadmaps', async (req, res) => {
     } catch (err) {
         if (err.code === '23505') {
             const existing = await pool.query(
-                'SELECT * FROM roadmaps WHERE user_id = $1 AND LOWER(topic) = LOWER($2)', [req.body.user_id, req.body.topic]
+                'SELECT * FROM roadmaps WHERE user_id = $1 AND LOWER(topic) = LOWER($2)',
+                [req.body.user_id, req.body.topic]
             );
             return res.json({ ...existing.rows[0], existing: true });
         }
@@ -423,6 +450,95 @@ router.post('/rooms/:id/messages', async (req, res) => {
         );
         res.json(result.rows[0]);
     } catch (err) { console.error('[API] Post room message error:', err); res.status(500).json({ error: 'Failed to send message' }); }
+});
+
+// ══════════════════════════════════════════
+//  LEVEL CONTENT & QUIZZES (for static course data)
+// ══════════════════════════════════════════
+
+// Get level content (theory and subtopics)
+router.get('/level-content/:roadmapId/:levelId', async (req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT * FROM level_content WHERE roadmap_id = $1 AND level_id = $2',
+            [req.params.roadmapId, req.params.levelId]
+        );
+        if (result.rows.length === 0) {
+            return res.json({ exists: false });
+        }
+        res.json({ exists: true, ...result.rows[0] });
+    } catch (err) {
+        console.error('[API] Get level content error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Save level content (theory and subtopics)
+router.put('/level-content', async (req, res) => {
+    try {
+        const { roadmap_id, level_id, theory_content, subtopics } = req.body;
+        if (!roadmap_id || !level_id) {
+            return res.status(400).json({ error: 'roadmap_id and level_id required' });
+        }
+        log('LevelContent', `Save: roadmap=${roadmap_id} level=${level_id}`);
+
+        const result = await pool.query(`
+            INSERT INTO level_content (roadmap_id, level_id, theory_content, subtopics, updated_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (roadmap_id, level_id) DO UPDATE SET
+                theory_content = COALESCE(EXCLUDED.theory_content, level_content.theory_content),
+                subtopics = COALESCE(EXCLUDED.subtopics, level_content.subtopics),
+                updated_at = NOW()
+            RETURNING *
+        `, [roadmap_id, level_id, theory_content || '', JSON.stringify(subtopics || [])]);
+
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('[API] Save level content error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Get level quiz
+router.get('/level-quiz/:roadmapId/:levelId', async (req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT * FROM level_quizzes WHERE roadmap_id = $1 AND level_id = $2',
+            [req.params.roadmapId, req.params.levelId]
+        );
+        if (result.rows.length === 0) {
+            return res.json({ exists: false });
+        }
+        res.json({ exists: true, ...result.rows[0] });
+    } catch (err) {
+        console.error('[API] Get level quiz error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Save level quiz
+router.put('/level-quiz', async (req, res) => {
+    try {
+        const { roadmap_id, level_id, questions } = req.body;
+        if (!roadmap_id || !level_id) {
+            return res.status(400).json({ error: 'roadmap_id and level_id required' });
+        }
+        log('LevelQuiz', `Save: roadmap=${roadmap_id} level=${level_id}`);
+
+        const result = await pool.query(`
+            INSERT INTO level_quizzes (roadmap_id, level_id, questions, updated_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (roadmap_id, level_id) DO UPDATE SET
+                questions = COALESCE(EXCLUDED.questions, level_quizzes.questions),
+                updated_at = NOW()
+            RETURNING *
+        `, [roadmap_id, level_id, JSON.stringify(questions || [])]);
+
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('[API] Save level quiz error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
 });
 
 export default router;

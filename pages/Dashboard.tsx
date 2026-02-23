@@ -25,7 +25,8 @@ const Dashboard: React.FC = () => {
       xp: realXp,
       level: realLevel,
       streak: 0,
-      rank: realRank
+      rank: realRank,
+      picture: undefined
     };
 
     if (storedUser) {
@@ -36,7 +37,7 @@ const Dashboard: React.FC = () => {
           id: googleUser.sub || baseUser.id,
           name: googleUser.name || baseUser.name,
           email: googleUser.email || baseUser.email,
-          picture: googleUser.picture
+          picture: googleUser.picture || baseUser.picture
         };
       } catch (e) {
         console.error("Failed to parse user from local storage", e);
@@ -65,13 +66,21 @@ const Dashboard: React.FC = () => {
         // Store the DB user ID for other services to use
         localStorage.setItem('db_user_id', String(dbUser.id));
 
-        // Update user state with DB data if it has more XP
+        // Update user state with DB data if it has more XP, but preserve picture from Google
         if (dbUser.xp > (user.xp || 0)) {
           setUser(prev => ({
             ...prev,
             xp: dbUser.xp,
             level: Math.floor(dbUser.xp / 200) + 1,
             streak: dbUser.streak || prev.streak,
+            // Always prefer Google profile picture if available
+            picture: googleUser.picture || dbUser.picture || prev.picture
+          }));
+        } else {
+          // Still ensure picture is set from Google
+          setUser(prev => ({
+            ...prev,
+            picture: googleUser.picture || prev.picture
           }));
         }
       } catch (err) {

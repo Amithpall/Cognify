@@ -91,3 +91,20 @@ export async function postRoomMessage(roomId: number, data: {
 }) {
     return apiFetch(`/rooms/${roomId}/messages`, { method: 'POST', body: JSON.stringify(data) });
 }
+
+// ── Level Content & Quizzes (Static Course Data) ──
+export async function checkRoadmapExists(userId: number, topic: string) {
+    return apiFetch(`/roadmaps/check?user_id=${userId}&topic=${encodeURIComponent(topic)}`);
+}
+export async function getLevelContent(roadmapId: number, levelId: string) {
+    return apiFetch(`/level-content/${roadmapId}/${encodeURIComponent(levelId)}`);
+}
+export async function saveLevelContent(data: { roadmap_id: number; level_id: string; theory_content?: string; subtopics?: any[] }) {
+    return apiFetch('/level-content', { method: 'PUT', body: JSON.stringify(data) });
+}
+export async function getLevelQuiz(roadmapId: number, levelId: string) {
+    return apiFetch(`/level-quiz/${roadmapId}/${encodeURIComponent(levelId)}`);
+}
+export async function saveLevelQuiz(data: { roadmap_id: number; level_id: string; questions?: any[] }) {
+    return apiFetch('/level-quiz', { method: 'PUT', body: JSON.stringify(data) });
+}

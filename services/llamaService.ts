@@ -4,13 +4,122 @@
  * Two modes:
  *   1) /llm-api  → FastAPI server (for JSON-parsed responses like roadmap, quiz)
  *   2) /ollama-stream → Ollama directly with stream:true (for real-time text)
+ *   3) OpenRouter → For free tier models (Arcee AI Trinity, GPT-5 Nano, Gemini Flash)
  *
- * Config via .env.local: LLAMA_MODEL, LLAMA_API_KEY
+ * Config via .env.local: 
+ *   - LLAMA_MODEL: Primary model (Ollama/vLLM)
+ *   - LLAMA_API_KEY: API key for Ollama server
+ *   - VITE_LLM_API_KEY: OpenRouter API key
+ *   - VITE_LLM_MODELS: Comma-separated list of fallback models (OpenRouter)
+ * 
+ * Model Switching: Supports fallback between multiple models
+ * - Primary: Kimi K2.5 Cloud (Ollama/vLLM)
+ * - Fallbacks: Arcee AI Trinity, GPT-5 Nano, Gemini Flash (OpenRouter)
  */
 
-const LLAMA_MODEL = 'kimi-k2.5:cloud';
+// Model configurations - can be overridden via env variables
+const getModelConfig = () => {
+    const fallbackModels = (import.meta.env.VITE_LLM_MODELS || 'arcee-ai/trinity-large-preview:free,openai/gpt-5-nano,google/gemini-2.0-flash-preview-0514').split(',');
+    return {
+        primary: import.meta.env.LLAMA_MODEL || 'kimi-k2.5:cloud',
+        fallbacks: fallbackModels,
+        // Combined list for roadmaps/chat - primary first, then fallbacks
+        roadmaps: [import.meta.env.LLAMA_MODEL || 'kimi-k2.5:cloud', ...fallbackModels],
+        chatbot: [import.meta.env.LLAMA_MODEL || 'kimi-k2.5:cloud', ...fallbackModels],
+        code: [import.meta.env.LLAMA_MODEL || 'kimi-k2.5:cloud', ...fallbackModels],
+    };
+};
+
+const LLAMA_MODEL = import.meta.env.LLAMA_MODEL || 'kimi-k2.5:cloud';
 const PROXY_ENDPOINT = '/llm-api';           // FastAPI (non-streaming)
 const STREAM_ENDPOINT = '/ollama-stream';     // Ollama direct (streaming)
+
+// OpenRouter configuration
+const OPENROUTER_API_KEY = import.meta.env.VITE_LLM_API_KEY;
+const OPENROUTER_BASE_URL = import.meta.env.VITE_LLM_BASE_URL || 'https://openrouter.ai/api/v1';
+
+// Check if a model is an OpenRouter model (uses / in name like 'arcee-ai/trinity-large-preview:free')
+function isOpenRouterModel(model: string): boolean {
+    return model.includes('/');
+}
+
+// Call OpenRouter API
+async function callOpenRouter(
+    messages: ChatMessage[],
+    model: string,
+    options: { temperature?: number; max_tokens?: number; stream?: boolean } = {}
+): Promise<{ text: string; stream?: AsyncGenerator<string> }> {
+    if (!OPENROUTER_API_KEY) {
+        throw new Error('OpenRouter API key not configured');
+    }
+
+    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+            'HTTP-Referer': window.location.origin,
+            'X-Title': 'Cognify',
+        },
+        body: JSON.stringify({
+            model: model,
+            messages: messages,
+            temperature: options.temperature ?? 0.7,
+            max_tokens: options.max_tokens ?? 4096,
+            stream: options.stream ?? false,
+        }),
+    });
+
+    if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`OpenRouter API error (${response.status}): ${error}`);
+    }
+
+    if (options.stream) {
+        // Return a streaming response
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error('No response body');
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        const generator = async function* () {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    if (!line.trim() || !line.startsWith('data: ')) continue;
+                    if (line.includes('[DONE]')) continue;
+
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        const content = data.choices?.[0]?.delta?.content || '';
+                        if (content) yield content;
+                    } catch { }
+                }
+            }
+        };
+
+        // For streaming, return accumulated text and stream
+        let accumulated = '';
+        const streamWrapper = async function* () {
+            for await (const chunk of generator()) {
+                accumulated += chunk;
+                yield chunk;
+            }
+        };
+        return { text: '', stream: streamWrapper() };
+    }
+
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content || '';
+    return { text };
+}
 
 interface ChatMessage {
     role: 'system' | 'user' | 'assistant';
@@ -31,23 +140,63 @@ function messagesToPrompt(messages: ChatMessage[]): string {
     }).join('\n') + '\n[Assistant]\n';
 }
 
+// Try multiple models with fallback - tries Ollama first, then OpenRouter
+async function tryModels(
+    models: string[],
+    fn: (model: string) => Promise<string>
+): Promise<string> {
+    let lastError: Error | null = null;
+
+    for (const model of models) {
+        try {
+            console.log(`[AI] Trying model: ${model}`);
+            return await fn(model);
+        } catch (err) {
+            console.warn(`[AI] Model ${model} failed:`, err);
+            lastError = err as Error;
+        }
+    }
+
+    throw new Error(`All models failed. Last error: ${lastError?.message}`);
+}
+
+// Wrapper for calling AI - decides whether to use Ollama or OpenRouter based on model
+async function callAI(
+    messages: ChatMessage[],
+    model: string,
+    options: { temperature?: number; max_tokens?: number } = {}
+): Promise<string> {
+    if (isOpenRouterModel(model)) {
+        // Use OpenRouter
+        const result = await callOpenRouter(messages, model, options);
+        return result.text;
+    } else {
+        // Use Ollama/vLLM
+        return llamaChat({ messages, ...options }, model);
+    }
+}
+
 // ════════════════════════════════════════════
 //  NON-STREAMING: full response at once
 //  Used for: roadmap, quiz, subtopics (need JSON parsing)
 // ════════════════════════════════════════════
 
-async function llamaChat(options: LlamaCompletionOptions): Promise<string> {
+async function llamaChat(options: LlamaCompletionOptions, model?: string): Promise<string> {
     const prompt = messagesToPrompt(options.messages);
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     const apiKey = process.env.LLAMA_API_KEY;
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-    console.log(`[AI] Non-stream request to ${PROXY_ENDPOINT}`);
+    const modelToUse = model || LLAMA_MODEL;
+    console.log(`[AI] Non-stream request to ${PROXY_ENDPOINT} (model: ${modelToUse})`);
 
     const response = await fetch(PROXY_ENDPOINT, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({
+            prompt,
+            model: modelToUse
+        }),
     });
 
     if (!response.ok) {
@@ -72,17 +221,19 @@ async function llamaChat(options: LlamaCompletionOptions): Promise<string> {
 
 async function llamaChatStream(
     options: LlamaCompletionOptions,
-    onToken: (accumulated: string) => void
+    onToken: (accumulated: string) => void,
+    model?: string
 ): Promise<string> {
     const prompt = messagesToPrompt(options.messages);
+    const modelToUse = model || LLAMA_MODEL;
 
-    console.log(`[AI] Streaming request to ${STREAM_ENDPOINT} (model: ${LLAMA_MODEL})`);
+    console.log(`[AI] Streaming request to ${STREAM_ENDPOINT} (model: ${modelToUse})`);
 
     const response = await fetch(STREAM_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            model: LLAMA_MODEL,
+            model: modelToUse,
             prompt: prompt,
             stream: true,
         }),
@@ -208,7 +359,12 @@ export class AIService {
         const all: ChatMessage[] = [];
         if (systemPrompt) all.push({ role: 'system', content: systemPrompt });
         all.push(...messages);
-        return llamaChat({ messages: all, temperature: 0.7 });
+
+        // Try multiple models with fallback - uses callAI which handles both Ollama and OpenRouter
+        return tryModels(
+            getModelConfig().chatbot,
+            async (model) => callAI(all, model, { temperature: 0.7 })
+        );
     }
 
     // ── Chat (TRUE streaming — token by token) ──
@@ -216,19 +372,47 @@ export class AIService {
         const all: ChatMessage[] = [];
         if (systemPrompt) all.push({ role: 'system', content: systemPrompt });
         all.push(...messages);
-        return llamaChatStream({ messages: all, temperature: 0.7 }, onToken);
+
+        // For streaming, try models sequentially - if one fails, try the next
+        let lastError: Error | null = null;
+        for (const model of getModelConfig().chatbot) {
+            try {
+                console.log(`[AI] Chat streaming with model: ${model}`);
+                if (isOpenRouterModel(model)) {
+                    // Use OpenRouter streaming
+                    const result = await callOpenRouter(all, model, { temperature: 0.7, stream: true });
+                    if (result.stream) {
+                        for await (const chunk of result.stream) {
+                            onToken(chunk);
+                        }
+                        return '';
+                    }
+                } else {
+                    // Use Ollama streaming
+                    return await llamaChatStream({ messages: all, temperature: 0.7 }, onToken, model);
+                }
+            } catch (err) {
+                console.warn(`[AI] Chat streaming model ${model} failed:`, err);
+                lastError = err as Error;
+            }
+        }
+        throw new Error(`All streaming models failed: ${lastError?.message}`);
     }
 
     // ── Roadmap (needs JSON parsing → non-streaming) ──
     async generateRoadmap(topic: string): Promise<Array<{ title: string; description: string; xpReward: number }>> {
-        const response = await llamaChat({
-            messages: [
-                { role: 'system', content: 'You are an expert curriculum designer. Return ONLY a valid JSON array, no markdown.' },
-                { role: 'user', content: `Create a 6-level roadmap for "${topic}" (beginner→advanced). JSON: [{"title":"...","description":"...","xpReward":100}]. XP: 100, +50/level. ONLY JSON.` }
-            ],
-            temperature: 0.7,
-            max_tokens: 2048,
-        });
+        // Try multiple models with fallback - uses callAI which handles both Ollama and OpenRouter
+        const response = await tryModels(
+            getModelConfig().roadmaps,
+            async (model) => callAI(
+                [
+                    { role: 'system', content: 'You are an expert curriculum designer. Return ONLY a valid JSON array, no markdown.' },
+                    { role: 'user', content: `Create a 6-level roadmap for "${topic}" (beginner→advanced). JSON: [{"title":"...","description":"...","xpReward":100}]. XP: 100, +50/level. ONLY JSON.` }
+                ],
+                model,
+                { temperature: 0.7, max_tokens: 2048 }
+            )
+        );
         try {
             const m = response.match(/\[[\s\S]*\]/);
             return JSON.parse(m ? m[0] : response);

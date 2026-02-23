@@ -106,6 +106,29 @@ export async function initTables() {
         persona VARCHAR(50),
         created_at TIMESTAMP DEFAULT NOW()
       );
+
+      -- Level content storage (theory, subtopics)
+      CREATE TABLE IF NOT EXISTS level_content (
+        id SERIAL PRIMARY KEY,
+        roadmap_id INTEGER REFERENCES roadmaps(id) ON DELETE CASCADE,
+        level_id VARCHAR(255) NOT NULL,
+        theory_content TEXT DEFAULT '',
+        subtopics JSONB DEFAULT '[]',
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(roadmap_id, level_id)
+      );
+
+      -- Quiz storage
+      CREATE TABLE IF NOT EXISTS level_quizzes (
+        id SERIAL PRIMARY KEY,
+        roadmap_id INTEGER REFERENCES roadmaps(id) ON DELETE CASCADE,
+        level_id VARCHAR(255) NOT NULL,
+        questions JSONB DEFAULT '[]',
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(roadmap_id, level_id)
+      );
     `);
 
     // Handle chat_messages — might exist from older version without session_id
@@ -150,6 +173,8 @@ export async function initTables() {
       CREATE INDEX IF NOT EXISTS idx_room_members_room ON room_members(room_id);
       CREATE INDEX IF NOT EXISTS idx_room_members_user ON room_members(user_id);
       CREATE INDEX IF NOT EXISTS idx_room_messages_room ON room_messages(room_id);
+      CREATE INDEX IF NOT EXISTS idx_level_content_roadmap ON level_content(roadmap_id);
+      CREATE INDEX IF NOT EXISTS idx_level_quizzes_roadmap ON level_quizzes(roadmap_id);
     `);
 
     console.log(`[DB] Tables initialized ${Date.now() - start} ms`);

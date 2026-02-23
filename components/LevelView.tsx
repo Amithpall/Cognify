@@ -3,6 +3,7 @@ import { RoadmapLevel, Subtopic, QuizQuestion, QuizResult } from '../types';
 import { aiService } from '../services/llamaService';
 import { progressService } from '../services/progressService';
 import QuizView from './QuizView';
+import * as api from '../services/apiService';
 
 interface LevelViewProps {
     level: RoadmapLevel;
@@ -30,74 +31,178 @@ const LevelView: React.FC<LevelViewProps> = ({ level, topic, roadmapId, roadmapD
     const [xpEarned, setXpEarned] = useState(0);
     const [isStreaming, setIsStreaming] = useState(false);
     const contentRef = useRef<HTMLDivElement>(null);
+    const [dataLoaded, setDataLoaded] = useState(false);
 
     const isCompleted = progressService.isLevelCompleted(roadmapId, level.id);
     const activeSubtopic = activeSubtopicIdx >= 0 ? subtopics[activeSubtopicIdx] : null;
 
-    // ── Load everything in PARALLEL ──
+    // ── Load everything: Check DB first, then generate if needed ──
     useEffect(() => {
+        // Use local var to track loading within this effect run
         let cancelled = false;
+        let loadedFromDB = false;
 
-        const loadOverview = async () => {
-            if (level.theoryContent) return;
-            setLoadingOverview(true);
-            setIsStreaming(true);
-            try {
-                // TRUE STREAMING: tokens appear instantly as Ollama generates them
-                const content = await aiService.generateLevelContentStream(
-                    topic, level.title, level.description,
-                    (accumulated) => {
-                        if (!cancelled) setOverviewContent(accumulated);
+        console.log('[LevelView] Effect run:', { roadmapDbId, levelId: level.id, hasTheory: !!level.theoryContent, subtopicsLen: level.subtopics?.length });
+
+        const loadAll = async () => {
+            // If we have roadmapDbId, try to load from DB first
+            if (roadmapDbId && level.id) {
+                console.log('[LevelView] Checking DB for:', { roadmapDbId, levelId: level.id });
+                try {
+                    // Parallel DB calls for content and quiz
+                    const [contentResult, quizResult] = await Promise.all([
+                        api.getLevelContent(roadmapDbId, level.id),
+                        api.getLevelQuiz(roadmapDbId, level.id)
+                    ]);
+
+                    if (cancelled) return;
+                    loadedFromDB = true;
+
+                    // Check what we have in DB - must check for actual content, not just truthy!
+                    console.log('[LevelView] DB raw response:', { contentResult, quizResult });
+                    const hasContent = contentResult.exists && typeof contentResult.theory_content === 'string' && contentResult.theory_content.trim().length > 0;
+                    const hasSubtopics = contentResult.exists && Array.isArray(contentResult.subtopics) && contentResult.subtopics.length > 0;
+                    const hasQuiz = quizResult.exists && Array.isArray(quizResult.questions) && quizResult.questions.length > 0;
+
+                    console.log('[LevelView] DB check:', { hasContent, hasSubtopics, hasQuiz });
+
+                    if (hasContent) {
+                        setOverviewContent(contentResult.theory_content);
+                        setLoadingOverview(false);
+                        console.log('[LevelView] ✓ Loaded theory from DB');
                     }
-                );
-                if (!cancelled) level.theoryContent = content;
-            } catch (err) {
-                if (!cancelled) setError('Failed to load overview.');
-                console.error(err);
-            } finally {
-                if (!cancelled) { setLoadingOverview(false); setIsStreaming(false); }
+                    if (hasSubtopics) {
+                        setSubtopics(contentResult.subtopics);
+                        setLoadingSubtopics(false);
+                        console.log('[LevelView] ✓ Loaded subtopics from DB');
+                    }
+                    if (hasQuiz) {
+                        setQuizQuestions(quizResult.questions);
+                        setLoadingQuiz(false);
+                        console.log('[LevelView] ✓ Loaded quiz from DB');
+                    }
+
+                    // Now generate what's missing
+                    // IMPORTANT: Always save BOTH theory_content and subtopics to avoid overwriting!
+                    if (!hasContent) {
+                        console.log('[LevelView] → Generating theory...');
+                        setLoadingOverview(true);
+                        setIsStreaming(true);
+                        try {
+                            const content = await aiService.generateLevelContentStream(
+                                topic, level.title, level.description,
+                                (acc) => { if (!cancelled) setOverviewContent(acc); }
+                            );
+                            if (!cancelled) {
+                                setLoadingOverview(false);
+                                setIsStreaming(false);
+                                // Save to DB - include EXISTING subtopics to avoid overwriting!
+                                try {
+                                    await api.saveLevelContent({
+                                        roadmap_id: roadmapDbId,
+                                        level_id: level.id,
+                                        theory_content: content,
+                                        subtopics: hasSubtopics ? contentResult.subtopics : []
+                                    });
+                                    console.log('[LevelView] ✓ Saved theory to DB');
+                                } catch (e) { console.error('[LevelView] Failed to save theory:', e); }
+                            }
+                        } catch (e) { if (!cancelled) { setLoadingOverview(false); setIsStreaming(false); } }
+                    }
+
+                    if (!hasSubtopics) {
+                        console.log('[LevelView] → Generating subtopics...');
+                        setLoadingSubtopics(true);
+                        try {
+                            const subs = await aiService.generateSubtopics(topic, level.title, level.description);
+                            const mapped: Subtopic[] = subs.map((s, i) => ({ id: `${level.id}-sub${i}`, title: s.title, description: s.description, content: '' }));
+                            if (!cancelled) {
+                                setSubtopics(mapped);
+                                setLoadingSubtopics(false);
+                                // Save to DB - include EXISTING theory_content to avoid overwriting!
+                                try {
+                                    await api.saveLevelContent({
+                                        roadmap_id: roadmapDbId,
+                                        level_id: level.id,
+                                        subtopics: mapped,
+                                        theory_content: hasContent ? contentResult.theory_content : ''
+                                    });
+                                    console.log('[LevelView] ✓ Saved subtopics to DB');
+                                } catch (e) { console.error('[LevelView] Failed to save subtopics:', e); }
+                            }
+                        } catch (e) { if (!cancelled) setLoadingSubtopics(false); }
+                    }
+
+                    if (!hasQuiz) {
+                        console.log('[LevelView] → Generating quiz...');
+                        setLoadingQuiz(true);
+                        try {
+                            const questions = await aiService.generateQuiz(topic, level.title);
+                            const mapped: QuizQuestion[] = questions.map((q, i) => ({ id: `${level.id}-q${i}`, ...q }));
+                            if (!cancelled) {
+                                setQuizQuestions(mapped);
+                                setLoadingQuiz(false);
+                                // Save to DB
+                                try {
+                                    await api.saveLevelQuiz({ roadmap_id: roadmapDbId, level_id: level.id, questions: mapped });
+                                    console.log('[LevelView] ✓ Saved quiz to DB');
+                                } catch (e) { console.error('[LevelView] Failed to save quiz:', e); }
+                            }
+                        } catch (e) { if (!cancelled) setLoadingQuiz(false); }
+                    }
+
+                    // Mark as loaded
+                    setDataLoaded(true);
+                    return;
+                } catch (dbErr) {
+                    console.error('[LevelView] DB load failed:', dbErr);
+                    loadedFromDB = true; // Mark as done to avoid re-triggering
+                }
+            }
+
+            // No DB available - generate directly
+            if (!loadedFromDB) {
+                console.log('[LevelView] No DB, generating directly...');
+                setLoadingOverview(true);
+                setLoadingSubtopics(true);
+                setLoadingQuiz(true);
+
+                try {
+                    const content = await aiService.generateLevelContentStream(
+                        topic, level.title, level.description,
+                        (acc) => { if (!cancelled) setOverviewContent(acc); }
+                    );
+                    if (!cancelled) {
+                        setLoadingOverview(false);
+                        setIsStreaming(false);
+                    }
+                } catch (e) { if (!cancelled) { setLoadingOverview(false); setIsStreaming(false); } }
+
+                try {
+                    const subs = await aiService.generateSubtopics(topic, level.title, level.description);
+                    const mapped: Subtopic[] = subs.map((s, i) => ({ id: `${level.id}-sub${i}`, title: s.title, description: s.description, content: '' }));
+                    if (!cancelled) {
+                        setSubtopics(mapped);
+                        setLoadingSubtopics(false);
+                    }
+                } catch (e) { if (!cancelled) setLoadingSubtopics(false); }
+
+                try {
+                    const questions = await aiService.generateQuiz(topic, level.title);
+                    const mapped: QuizQuestion[] = questions.map((q, i) => ({ id: `${level.id}-q${i}`, ...q }));
+                    if (!cancelled) {
+                        setQuizQuestions(mapped);
+                        setLoadingQuiz(false);
+                    }
+                } catch (e) { if (!cancelled) setLoadingQuiz(false); }
+
+                setDataLoaded(true);
             }
         };
 
-        const loadSubtopics = async () => {
-            if (level.subtopics.length > 0) return;
-            setLoadingSubtopics(true);
-            try {
-                const subs = await aiService.generateSubtopics(topic, level.title, level.description);
-                const mapped: Subtopic[] = subs.map((s, i) => ({
-                    id: `${level.id}-sub${i}`,
-                    title: s.title,
-                    description: s.description,
-                    content: '',
-                }));
-                if (!cancelled) { setSubtopics(mapped); level.subtopics = mapped; }
-            } catch (err) {
-                if (!cancelled) console.error('Failed to load subtopics:', err);
-            } finally {
-                if (!cancelled) setLoadingSubtopics(false);
-            }
-        };
-
-        const loadQuiz = async () => {
-            if (level.quiz.length > 0) return;
-            setLoadingQuiz(true);
-            try {
-                const questions = await aiService.generateQuiz(topic, level.title);
-                const mapped: QuizQuestion[] = questions.map((q, i) => ({ id: `${level.id}-q${i}`, ...q }));
-                if (!cancelled) { setQuizQuestions(mapped); level.quiz = mapped; }
-            } catch (err) {
-                if (!cancelled) console.error('Failed to load quiz:', err);
-            } finally {
-                if (!cancelled) setLoadingQuiz(false);
-            }
-        };
-
-        loadOverview();
-        loadSubtopics();
-        loadQuiz();
-
+        loadAll();
         return () => { cancelled = true; };
-    }, [level.id]);
+    }, [level.id, roadmapDbId]);
 
     // ── Load subtopic content with TRUE STREAMING ──
     useEffect(() => {
